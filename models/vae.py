@@ -471,8 +471,16 @@ class AutoencoderKL(nn.Module):
         print(f"Restored from {path}")
 
     def encode(self, x):
-        h = self.encoder(x)
-        moments = self.quant_conv(h)
+        h = self.encoder(x)  # NOTE h: [bs, 2*embed_dim, imageH/16, imageW/16]
+        moments = self.quant_conv(h)  # NOTE moments b, [ μ , logσ² ], imageH/16, imageW/16. This is the quantization convolution, although it is not a quantization (it's just a historical name)
+
+        mean = moments[:, : self.embed_dim].detach().cpu().numpy()
+        logvar = moments[:, self.embed_dim :].detach().cpu().numpy()
+        var = np.exp(logvar)
+        # NOTE in a trained vae, var is usually very very small because
+        # the reconstruction loss has a higher weight, driving the variance to 0
+        # on the other hand, the weight for the kl loss is usually very small. kl loss is the force that drives the latent distribution to unit gaussian
+
         if not self.use_variational:
             moments = torch.cat((moments, torch.ones_like(moments)), 1)
         posterior = DiagonalGaussianDistribution(moments)

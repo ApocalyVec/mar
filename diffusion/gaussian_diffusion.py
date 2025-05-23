@@ -732,6 +732,7 @@ class GaussianDiffusion:
             model_kwargs = {}
         if noise is None:
             noise = th.randn_like(x_start)
+        # TODO q_sample adds the right amount of Gaussian noise to an original sample to land at a particular diffusion-time t
         x_t = self.q_sample(x_start, t, noise=noise)
 
         terms = {}
@@ -748,7 +749,7 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, t, **model_kwargs)
+            model_output = model(x_t, t, **model_kwargs)  # NOTE the model here is SimpleMLPAdaLN
 
             if self.model_var_type in [
                 ModelVarType.LEARNED,

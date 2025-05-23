@@ -1,5 +1,6 @@
 from functools import partial
 
+import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
 import scipy.stats as stats
@@ -170,27 +171,30 @@ class MAR(nn.Module):
         return mask
 
     def forward_mae_encoder(self, x, mask, class_embedding):
-        x = self.z_proj(x)
+        x = self.z_proj(x)  # adapt token embedding to encoder
         bsz, seq_len, embed_dim = x.shape
 
         # concat buffer
+        # NOTE buffer is used to store duplicated class embedding, it is useful for
+        # NOTE 1. more context to attend to
+        # NOTE 2. avoid the class embedding to be masked out
         x = torch.cat([torch.zeros(bsz, self.buffer_size, embed_dim, device=x.device), x], dim=1)
         mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
 
         # random drop class embedding during training
         if self.training:
-            drop_latent_mask = torch.rand(bsz) < self.label_drop_prob
+            drop_latent_mask = torch.rand(bsz) < self.label_drop_prob  # NOTE 10% of the batch will have the class embedding dropped
             drop_latent_mask = drop_latent_mask.unsqueeze(-1).cuda().to(x.dtype)
             class_embedding = drop_latent_mask * self.fake_latent + (1 - drop_latent_mask) * class_embedding
 
-        x[:, :self.buffer_size] = class_embedding.unsqueeze(1)
+        x[:, :self.buffer_size] = class_embedding.unsqueeze(1)  # NOTE copy the class embedding to all of the buffer positions
 
         # encoder position embedding
         x = x + self.encoder_pos_embed_learned
         x = self.z_proj_ln(x)
 
         # dropping
-        x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)
+        x = x[(1-mask_with_buffer).nonzero(as_tuple=True)].reshape(bsz, -1, embed_dim)  # NOTE masked positions are dropped from the input
 
         # apply Transformer blocks
         if self.grad_checkpointing and not torch.jit.is_scripting():
@@ -209,9 +213,9 @@ class MAR(nn.Module):
         mask_with_buffer = torch.cat([torch.zeros(x.size(0), self.buffer_size, device=x.device), mask], dim=1)
 
         # pad mask tokens
-        mask_tokens = self.mask_token.repeat(mask_with_buffer.shape[0], mask_with_buffer.shape[1], 1).to(x.dtype)
+        mask_tokens = self.mask_token.repeat(mask_with_buffer.shape[0], mask_with_buffer.shape[1], 1).to(x.dtype)  # NOTE batch_size, seq_len, embed_dim
         x_after_pad = mask_tokens.clone()
-        x_after_pad[(1 - mask_with_buffer).nonzero(as_tuple=True)] = x.reshape(x.shape[0] * x.shape[1], x.shape[2])
+        x_after_pad[(1 - mask_with_buffer).nonzero(as_tuple=True)] = x.reshape(x.shape[0] * x.shape[1], x.shape[2])  # NOTE masked positions are filled with the mask token, non-masked positions are filled with the decoder output
 
         # decoder position embedding
         x = x_after_pad + self.decoder_pos_embed_learned
@@ -243,16 +247,31 @@ class MAR(nn.Module):
         class_embedding = self.class_emb(labels)
 
         # patchify and mask (drop) tokens
-        x = self.patchify(imgs)
-        gt_latents = x.clone().detach()
-        orders = self.sample_orders(bsz=x.size(0))
+        x = self.patchify(imgs)  # NOTE in train, imgs here are the latents sampled from vae
+        gt_latents = x.clone().detach()  # NOTE ground truth latents
+        orders = self.sample_orders(bsz=x.size(0))  # NOTE auto-regressive generation orders
         mask = self.random_masking(x, orders)
 
+        """
+        order_img = orders[0].view(4, 4).detach().cpu().numpy()
+        mask_img  = mask[0].view(4, 4).detach().cpu().numpy()
+
+        fig, ax = plt.subplots(1, 2, figsize=(7, 3.5))
+        im0 = ax[0].imshow(order_img, cmap="viridis")
+        ax[0].set_title("Generation order\n(0 ⇒ first predicted)")
+        fig.colorbar(im0, ax=ax[0], shrink=0.7)
+
+        im1 = ax[1].imshow(mask_img, cmap="gray_r")
+        # ax[1].set_title(f"Mask (white = masked)\n{k} / {L} tokens")
+        fig.tight_layout()
+        plt.show()
+        """
         # mae encoder
         x = self.forward_mae_encoder(x, mask, class_embedding)
 
         # mae decoder
         z = self.forward_mae_decoder(x, mask)
+        # TODO z is the predicted vae latents for the masked patches
 
         # diffloss
         loss = self.forward_loss(z=z, target=gt_latents, mask=mask)

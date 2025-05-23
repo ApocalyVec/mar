@@ -24,6 +24,7 @@ class DiffLoss(nn.Module):
         self.gen_diffusion = create_diffusion(timestep_respacing=num_sampling_steps, noise_schedule="cosine")
 
     def forward(self, target, z, mask=None):
+        # NOTE t is randomly sampled for each patch in all batches
         t = torch.randint(0, self.train_diffusion.num_timesteps, (target.shape[0],), device=target.device)
         model_kwargs = dict(c=z)
         loss_dict = self.train_diffusion.training_losses(self.net, target, t, model_kwargs)

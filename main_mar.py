@@ -1,7 +1,9 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"  # Set to the GPU you want to use
+
 import argparse
 import datetime
 import numpy as np
-import os
 import time
 from pathlib import Path
 
@@ -224,7 +226,7 @@ def main(args):
     print("actual lr: %.2e" % args.lr)
     print("effective batch size: %d" % eff_batch_size)
 
-    if args.distributed:
+    if args.distributed:  # NOTE: this is one of the ways to do scale up training in torch
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
 
